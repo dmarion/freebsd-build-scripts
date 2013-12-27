@@ -1,0 +1,112 @@
+#!/bin/sh
+
+SRC=/usr/src
+MNT=/mnt
+BASEDIR=/tmp/erlite-3
+ROOTDIR=${BASEDIR}/root
+LOGDIR=${BASEDIR}/log
+BLOCKS=7579008
+JOBS=8
+MAKE_ARGS="-C ${SRC} TARGET=mips TARGET_ARCH=mips64 -DWITHOUT_CDDL -DWITHOUT_GAMES -DWITHOUT_DOCS -DWITHOUT_NIS -DWITHOUT_IPX -DWITHOUT_ATM -DWITHOUT_ACPI -DWITHOUT_RESCUE -DWITHOUT_FLOPPY -DWITHOUT_IPX_SUPPORT -DWITHOUT_LPR -DWITHOUT_NDIS "
+
+NO_DEV="cbb pccard cardbus asr amr ciss dpt iir ips mly aac ahc ahd esp hptiop isp ispfw mpt mps ncr trm adv adw aic bt aacp ida mfi mlx pst twe de em igb ixgbe le ti txp vx ar age alc ale bce bfe bge dc et fxp jme lge msk nge nve pcn re rl sf sge sis sk ste stge tl tx vge vr wb xl an ath ath_pci ath_hal ath_rate_sample ral mvs ae wi urio uipaq uvisor"
+
+NO_OPT="AHC_REG_PRETTY_PRINT AHD_REG_PRETTY_PRINT AH_SUPPORT_AR5416"
+
+mkdir -p ${LOGDIR} 
+
+case $1 in
+        mkconfig)
+                cp ${SRC}/sys/mips/conf/OCTEON1 ${SRC}/sys/mips/conf/ERLITE-3
+                sed -i -e "s/\(ident.*\)OCTEON1/\1ERLITE-3/" ${SRC}/sys/mips/conf/ERLITE-3
+                sed -i -e "s/.options\(.*OCTEON_VENDOR_UBIQUITI\)/options \1/" ${SRC}/sys/mips/conf/ERLITE-3
+                sed -i -e "s/ROOTDEVNAME\(.*\)cf0s2a/ROOTDEVNAME\1da0s2a/" ${SRC}/sys/mips/conf/ERLITE-3
+		for i in ${NO_DEV}; do
+			sed -i -e "s/\(^device[[:space:]]*${i}[[:space:]]\)/#\1/" ${SRC}/sys/mips/conf/ERLITE-3
+		done
+		for i in ${NO_OPT}; do
+			sed -i -e "s/\(^options[[:space:]]*${i}[[:space:]]\)/#\1/" ${SRC}/sys/mips/conf/ERLITE-3
+		done
+                diff -ruN ${SRC}/sys/mips/conf/OCTEON1 ${SRC}/sys/mips/conf/ERLITE-3
+                ;;
+        build)
+		echo "Building world... (output redirected to ${LOGDIR}/buildworld.log)"
+                make -j ${JOBS} ${MAKE_ARGS} buildworld > ${LOGDIR}/buildworld.log
+                if [ $? -ne 0 ]; then
+                        echo "buildworld failed"
+                        exit 1
+                fi
+
+		echo "Building kernel... (output redirected to ${LOGDIR}/buildkernel.log)"
+                make -j ${JOBS} ${MAKE_ARGS} KERNCONF=ERLITE-3 buildkernel > ${LOGDIR}/buildkernel.log
+                if [ $? -ne 0 ]; then
+                        echo "buildkernel failed"
+                        exit 1
+                fi
+                ;;
+        mkimage)
+		chflags -R 0 ${ROOTDIR}
+		rm -rf  ${ROOTDIR} ${BASEDIR}/erlite-3.img ${BASEDIR}/erlite-3.ufs
+		mkdir -p ${ROOTDIR}
+		dd if=/dev/zero of=${BASEDIR}/erlite-3.img oseek=${BLOCKS} bs=512 count=0
+		MD=$(mdconfig -f ${BASEDIR}/erlite-3.img)
+		gpart create -s mbr ${MD}
+		gpart add -t !6 -s  64m ${MD}
+		gpart add -t freebsd ${MD}
+		gpart create -s BSD ${MD}s2
+		gpart add -b 16 -t freebsd-ufs ${MD}s2
+
+		# install world
+		#newfs /dev/${MD}s2a
+		#tunefs -n enable /dev/${MD}s2a
+		#tunefs -j enable -S 4194304 /dev/${MD}s2a
+		#tunefs -N enable /dev/${MD}s2a 
+
+		#mount /dev/${MD}s2a ${MNT}
+
+		echo "Installing world... (output redirected to ${LOGDIR}/installworld.log)"
+		make ${MAKE_ARGS} DESTDIR=${ROOTDIR} installworld > ${LOGDIR}/installworld.log
+		if [ $? -ne 0 ]; then
+			echo "installworld failed"
+			umount ${MNT}
+			mdconfig -d -u ${MD}
+			exit 1
+		fi
+
+                echo "Creating distribution... (output redirected to ${LOGDIR}/distribution.log)"
+                make ${MAKE_ARGS} DESTDIR=${ROOTDIR} distribution > ${LOGDIR}/distribution.log
+                if [ $? -ne 0 ]; then
+                        echo "distribution failed"
+			umount ${MNT}
+			mdconfig -d -u ${MD}
+                        exit 1
+                fi
+
+                echo "Installing kernel... (output redirected to ${LOGDIR}/installkernel.log)"
+                make ${MAKE_ARGS} KERNCONF=ERLITE-3 DESTDIR=${ROOTDIR} installkernel > ${LOGDIR}/installkernel.log
+                if [ $? -ne 0 ]; then
+                        echo "install failed"
+			umount ${MNT}
+			mdconfig -d -u ${MD}
+                        exit 1
+                fi
+
+                echo "# Device       Mountpoint      FStype  Options         Dump    Pass#" > ${ROOTDIR}/etc/fstab
+                echo "/dev/da0s2a    /               ufs     rw              1       1"    >> ${ROOTDIR}/etc/fstab
+                echo "hostname=erlite-3"    > ${ROOTDIR}/etc/rc.conf
+                echo "ifconfig_octe0=DHCP" >> ${ROOTDIR}/etc/rc.conf
+		makefs -B big -s 2g ${BASEDIR}/erlite-3.ufs ${ROOTDIR}
+		dd if=${BASEDIR}/erlite-3.ufs of=/dev/${MD}s2a bs=1m
+
+		# Create FAT partition and copy kernel
+		newfs_msdos -F 16 /dev/${MD}s1
+		mount -t msdosfs /dev/${MD}s1 /mnt
+		cp ${ROOTDIR}/boot/kernel/kernel /mnt
+		ls -la /mnt
+		umount /mnt
+
+		mdconfig -d -u ${MD}
+		;;
+
+
+esac
