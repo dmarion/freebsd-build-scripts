@@ -57,13 +57,6 @@ case $1 in
 		gpart add -b 16 -t freebsd-ufs ${MD}s2
 
 		# install world
-		#newfs /dev/${MD}s2a
-		#tunefs -n enable /dev/${MD}s2a
-		#tunefs -j enable -S 4194304 /dev/${MD}s2a
-		#tunefs -N enable /dev/${MD}s2a 
-
-		#mount /dev/${MD}s2a ${MNT}
-
 		echo "Installing world... (output redirected to ${LOGDIR}/installworld.log)"
 		make ${MAKE_ARGS} DESTDIR=${ROOTDIR} installworld > ${LOGDIR}/installworld.log
 		if [ $? -ne 0 ]; then
@@ -100,10 +93,10 @@ case $1 in
 
 		# Create FAT partition and copy kernel
 		newfs_msdos -F 16 /dev/${MD}s1
-		mount -t msdosfs /dev/${MD}s1 /mnt
-		cp ${ROOTDIR}/boot/kernel/kernel /mnt
-		ls -la /mnt
-		umount /mnt
+		mount -t msdosfs /dev/${MD}s1 ${MNT}
+		cp ${ROOTDIR}/boot/kernel/kernel ${MNT}
+		ls -la ${MNT}
+		umount ${MNT}
 
 		mdconfig -d -u ${MD}
 		;;
